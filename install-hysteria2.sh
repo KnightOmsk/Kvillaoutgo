@@ -20,8 +20,21 @@ case "$ARCH" in
 esac
 
 get_all_ips() {
-    ip addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d'/' -f1 | \
-    grep -Ev '^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)'
+    local ips
+
+    ips=$(ip -o -4 addr show \
+        | awk '{print $4}' \
+        | cut -d/ -f1 \
+        | grep -Ev '^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)')
+
+    if [ -n "$ips" ]; then
+        echo "$ips"
+        return
+    fi
+
+    curl -4fsS https://api.ipify.org 2>/dev/null || \
+    curl -4fsS https://ifconfig.me 2>/dev/null || \
+    curl -4fsS https://ipv4.icanhazip.com 2>/dev/null
 }
 
 # ============================================================
