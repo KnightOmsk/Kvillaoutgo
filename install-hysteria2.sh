@@ -334,7 +334,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
 
   echo "⚙️  Creating Hysteria2 configuration..."
   cat > "$CONFIG_PATH" <<EOF
-listen: $SELECTED_IP:443
+listen: :443
 tls:
   cert: $CERT_PATH
   key: $KEY_PATH
