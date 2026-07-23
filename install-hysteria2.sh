@@ -356,8 +356,6 @@ masquerade:
 outbounds:
   - name: ip_outbound
     type: direct
-    direct:
-      bindIPv4: $SELECTED_IP
 acl:
   inline:
     - ip_outbound(all)
