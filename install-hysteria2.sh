@@ -19,6 +19,25 @@ case "$ARCH" in
         ;;
 esac
 
+# ============================================================
+# BASE DEPENDENCIES — устанавливаются в самом начале,
+# ДО того как cleanup_dead_services/detect_gateway_for_ip
+# попытаются использовать ip, iptables, tc, python3, ping и т.д.
+# ============================================================
+echo "📦 Checking base dependencies..."
+BASE_PACKAGES="wget curl tar openssl qrencode python3 iptables iproute2 e2fsprogs iputils-ping"
+MISSING_PKGS=""
+for pkg in $BASE_PACKAGES; do
+    dpkg -s "$pkg" &>/dev/null || MISSING_PKGS="$MISSING_PKGS $pkg"
+done
+if [ -n "$MISSING_PKGS" ]; then
+    echo "📦 Installing missing base dependencies:$MISSING_PKGS"
+    apt update -qq
+    apt install -y $MISSING_PKGS
+else
+    echo "✅ All base dependencies already installed."
+fi
+
 get_all_ips() {
     local ips
 
@@ -90,7 +109,7 @@ detect_gateway_for_ip() {
         heuristic_gw=$(python3 -c "
 import ipaddress
 print(str(ipaddress.ip_interface('$cidr').network.network_address + 1))
-" 2>/dev/null)
+" 2>/dev/null) || true
     fi
 
     # Реальный тест связи - сначала shared, потом heuristic
@@ -284,14 +303,14 @@ net.ipv4.ip_nonlocal_bind=1
 EOF
 sysctl --system > /dev/null 2>&1 || true
 
-PACKAGES="wget curl tar openssl qrencode python3 iptables iproute2 e2fsprogs"
+# Доп. пакеты нужны ТОЛЬКО если выбран SOCKS5 (компиляция microsocks)
+PACKAGES=""
 if [ "$SOCKS_CHOICE" == "1" ]; then
-    PACKAGES="$PACKAGES build-essential git"
+    PACKAGES="build-essential git"
 fi
 
-if [ ! -f "/usr/local/bin/hysteria" ] || { [ "$SOCKS_CHOICE" == "1" ] && [ ! -f "/usr/local/bin/microsocks" ]; }; then
-  echo "📦 Installing base dependencies..."
-  apt update
+if [ -n "$PACKAGES" ] && [ ! -f "/usr/local/bin/microsocks" ]; then
+  echo "📦 Installing extra dependencies for SOCKS5..."
   apt install -y $PACKAGES
 fi
 
@@ -303,10 +322,41 @@ fi
 
 if [ ! -f "/usr/local/bin/hysteria" ]; then
   echo "⬇️  Fetching the latest Hysteria2 version..."
-  VERSION=$(curl -4 -s https://api.github.com/repos/apernet/hysteria/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+
+  # Метод 1 (основной, официальный): собственный API Hysteria2, без лимитов GitHub
+  VERSION=$(curl -4 -s --max-time 10 \
+    "https://api.hy2.io/v1/update?cver=installscript&plat=linux&arch=${HYS_ARCH}&chan=release&side=server" \
+    | grep -oP '"lver":\s*"v[0-9.]+"' | cut -d'"' -f4)
+  [ -n "$VERSION" ] && VERSION="app/$VERSION"
+
+  # Метод 2 (fallback): GitHub API
+  if [ -z "$VERSION" ]; then
+    echo "⚠️  api.hy2.io недоступен, пробуем через GitHub API..."
+    VERSION=$(curl -4 -s --max-time 10 https://api.github.com/repos/apernet/hysteria/releases/latest \
+               | grep '"tag_name":' | cut -d'"' -f4)
+  fi
+
+  # Метод 3 (fallback): редирект со страницы /releases/latest — не подпадает под лимит API
+  if [ -z "$VERSION" ]; then
+    echo "⚠️  GitHub API недоступен/лимит исчерпан, пробуем через редирект..."
+    VERSION=$(curl -4 -s --max-time 10 -o /dev/null -w '%{redirect_url}' \
+               https://github.com/apernet/hysteria/releases/latest \
+               | sed -n 's#.*/tag/##p')
+    VERSION=$(python3 -c "import urllib.parse,sys; print(urllib.parse.unquote(sys.argv[1]))" "$VERSION")
+  fi
+
+  if [ -z "$VERSION" ]; then
+    echo "❌ Не удалось определить версию Hysteria2 (все 3 метода не сработали)."
+    echo "   Укажите версию вручную, например: VERSION=app/v2.12.1 $0"
+    exit 1
+  fi
 
   echo "📥 Downloading Hysteria2 version $VERSION ($HYS_ARCH architecture)..."
-  wget -4 --timeout=30 --tries=3 -qO /usr/local/bin/hysteria "https://github.com/apernet/hysteria/releases/download/${VERSION}/hysteria-linux-${HYS_ARCH}"
+  if ! wget -4 --timeout=30 --tries=3 -qO /usr/local/bin/hysteria \
+       "https://github.com/apernet/hysteria/releases/download/${VERSION}/hysteria-linux-${HYS_ARCH}"; then
+    echo "❌ Ошибка загрузки бинарника Hysteria2. Проверьте сеть/версию."
+    exit 1
+  fi
 else
   echo "✅ Hysteria2 is already installed."
 fi
@@ -498,7 +548,7 @@ if [ -n "$WEBHOOK_URL" ]; then
     echo "📊 Sending data to Google Sheets..."
     SHEET_IP="${SELECTED_IP}:1080"
 
-    CURL_CMD=(curl -4 -s -L -X POST "$WEBHOOK_URL"
+    CURL_CMD=(curl -4 -s -L --max-time 15 --connect-timeout 10 -X POST "$WEBHOOK_URL"
         --data-urlencode "ip=$SHEET_IP"
         --data-urlencode "user=$NEW_USER"
         --data-urlencode "pass=$NEW_PASS"
@@ -512,7 +562,7 @@ if [ -n "$WEBHOOK_URL" ]; then
         TARGET_SHEET="Default Sheet"
     fi
 
-    HTTP_RESPONSE=$("${CURL_CMD[@]}")
+    HTTP_RESPONSE=$("${CURL_CMD[@]}") || HTTP_RESPONSE="curl_failed"
 
     if [[ "$HTTP_RESPONSE" == *"Success"* ]]; then
         echo "✅ Data successfully added to the sheet ($TARGET_SHEET)!"
