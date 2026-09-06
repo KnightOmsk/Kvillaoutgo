@@ -284,16 +284,6 @@ echo "🌐 Detected gateway for $SELECTED_IP: $GATEWAY (via $INTERFACE)"
 # --- GLOBAL ANTI-DETECT OS & NETWORK OPTIMIZATIONS ---
 echo "🥷 Applying global kernel network settings and DNS protection..."
 
-if ! grep -q "nameserver 1.1.1.1" /etc/resolv.conf 2>/dev/null; then
-    systemctl stop systemd-resolved 2>/dev/null || true
-    systemctl disable systemd-resolved 2>/dev/null || true
-    chattr -i /etc/resolv.conf 2>/dev/null || true
-    rm -f /etc/resolv.conf
-    echo "nameserver 1.1.1.1" > /etc/resolv.conf
-    echo "nameserver 1.0.0.1" >> /etc/resolv.conf
-    chattr +i /etc/resolv.conf
-fi
-
 cat > /etc/sysctl.d/99-proxy-tuning.conf <<EOF
 net.ipv4.tcp_timestamps=0
 net.core.default_qdisc=fq
